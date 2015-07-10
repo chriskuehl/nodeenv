@@ -1,0 +1,5 @@
+nodeenv (0.13.2-1) unstable; urgency=medium
+
+  * Initial release. (Closes: #792010)
+
+ -- Chris Kuehl <ckuehl@ocf.berkeley.edu>  Sat, 04 Jul 2015 00:40:02 -0700

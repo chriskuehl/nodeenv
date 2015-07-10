@@ -1,0 +1,7 @@
+[authors]
+.B nodeenv
+was primarily written by Eugene Kalinin.
+[see also]
+Documentation for
+.B nodeenv
+is available online at https://github.com/ekalinin/nodeenv

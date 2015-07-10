@@ -1,0 +1,28 @@
+Source: nodeenv
+Section: utils
+Priority: extra
+Maintainer: Chris Kuehl <ckuehl@ocf.berkeley.edu>
+Build-Depends: debhelper (>= 9),
+               dh-python,
+               python3-all,
+               python3-pkg-resources,
+               python3-pkginfo,
+               python3-setuptools
+Standards-Version: 3.9.6
+X-Python3-Version: >= 3.3
+Vcs-Git: https://github.com/chriskuehl/nodeenv.git
+Vcs-Browser: https://github.com/chriskuehl/nodeenv
+Homepage: https://ekalinin.github.io/nodeenv/
+
+Package: nodeenv
+Recommends: gcc (>= 4:4.9.1), g++ (>= 4:4.9.1), libssl-dev, python
+Suggests: nodejs
+Architecture: all
+Depends: python3-pkg-resources, ${misc:Depends}, ${python3:Depends},
+ make, coreutils
+Description: Node.js virtual environment builder
+ Tool to create isolated node.js environments with their own installation
+ directories that don't share libraries with other node.js virtual
+ environments, similar to a Python virtualenv.
+ .
+ These environments can be integrated with ones created by Python's virtualenv.
