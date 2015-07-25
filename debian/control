@@ -9,7 +9,6 @@ Build-Depends: debhelper (>= 9),
                python3-pkginfo,
                python3-setuptools
 Standards-Version: 3.9.6
-X-Python3-Version: >= 3.3
 Vcs-Git: https://github.com/chriskuehl/nodeenv.git
 Vcs-Browser: https://github.com/chriskuehl/nodeenv
 Homepage: https://ekalinin.github.io/nodeenv/
