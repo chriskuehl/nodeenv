@@ -1,3 +1,9 @@
+nodeenv (0.13.3-1~stretch1) stretch; urgency=medium
+
+  * Backport for stretch.
+
+ -- Chris Kuehl <ckuehl@techxonline.net>  Fri, 31 Jul 2015 17:27:36 -0400
+
 nodeenv (0.13.3-1) unstable; urgency=medium
 
   * New upstream version
