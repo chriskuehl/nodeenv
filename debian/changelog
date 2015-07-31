@@ -1,3 +1,9 @@
+nodeenv (0.13.3-1~vivid1) vivid; urgency=medium
+
+  * Backport for vivid.
+
+ -- Chris Kuehl <ckuehl@techxonline.net>  Fri, 31 Jul 2015 17:29:23 -0400
+
 nodeenv (0.13.3-1) unstable; urgency=medium
 
   * New upstream version
