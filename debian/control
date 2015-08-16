@@ -14,10 +14,9 @@ Vcs-Browser: https://github.com/chriskuehl/nodeenv
 Homepage: https://ekalinin.github.io/nodeenv/
 
 Package: nodeenv
-Recommends: gcc (>= 4:4.9.1), g++ (>= 4:4.9.1), libssl-dev, python
-Suggests: nodejs
 Architecture: all
-Depends: python3-pkg-resources, ${misc:Depends}, ${python3:Depends}, make
+Depends: python3-pkg-resources, ${misc:Depends}, ${python3:Depends}, make,
+ gcc (>= 4:4.9.1) | nodejs, g++ (>= 4:4.9.1) | nodejs, libssl-dev | nodejs, python2.7 | nodejs
 Description: Node.js virtual environment builder
  Tool to create isolated node.js environments with their own installation
  directories that don't share libraries with other node.js virtual
