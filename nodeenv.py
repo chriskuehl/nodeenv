@@ -36,7 +36,7 @@ except ImportError:  # pragma: no cover (py3 only)
 
 from pkg_resources import parse_version
 
-nodeenv_version = '0.13.4'
+nodeenv_version = '0.13.6'
 
 join = os.path.join
 abspath = os.path.abspath
@@ -390,7 +390,7 @@ def writefile(dest, content, overwrite=True, append=False):
         if append:
             logger.info(' * Appending data to %s', dest)
             with open(dest, 'ab') as f:
-                f.write(DISABLE_POMPT.encode('utf-8'))
+                f.write(DISABLE_PROMPT.encode('utf-8'))
                 f.write(content)
                 f.write(ENABLE_PROMPT.encode('utf-8'))
             return
@@ -467,9 +467,9 @@ def get_node_src_url(version, postfix=''):
     node_name = '%s-v%s%s' % (get_binary_prefix(), version, postfix)
     tar_name = '%s.tar.gz' % (node_name)
     if parse_version(version) > parse_version("0.5.0"):
-        node_url = 'http://%s/dist/v%s/%s' % (src_domain, version, tar_name)
+        node_url = 'https://%s/dist/v%s/%s' % (src_domain, version, tar_name)
     else:
-        node_url = 'http://%s/dist/%s' % (src_domain, tar_name)
+        node_url = 'https://%s/dist/%s' % (src_domain, tar_name)
     return node_url
 
 
@@ -505,7 +505,8 @@ def get_node_src_url_postfix(opt):
 
 
 def urlopen(url):
-    headers = {'User-Agent': 'nodeenv v.' + nodeenv_version}
+    home_url = "https://github.com/ekalinin/nodeenv/"
+    headers = {'User-Agent': 'nodeenv/%s (%s)' % (nodeenv_version, home_url)}
     req = urllib2.Request(url, None, headers)
     return urllib2.urlopen(req)
 
@@ -893,7 +894,7 @@ def main():
 # ---------------------------------------------------------
 # Shell scripts content
 
-DISABLE_POMPT = """
+DISABLE_PROMPT = """
 # disable nodeenv's prompt
 # (prompt already changed by original virtualenv's script)
 # https://github.com/ekalinin/nodeenv/issues/26
