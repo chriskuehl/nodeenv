@@ -1,3 +1,4 @@
+/debhelper-build-stamp
 /*.log
 /nodeenv/
 /files

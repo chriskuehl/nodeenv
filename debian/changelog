@@ -1,3 +1,10 @@
+nodeenv (1.1.0-1) unstable; urgency=medium
+
+  * New upstream version
+  * Debian standards version 3.9.8
+
+ -- Chris Kuehl <ckuehl@ocf.berkeley.edu>  Sat, 21 Jan 2017 15:49:24 -0800
+
 nodeenv (0.13.6-1) unstable; urgency=medium
 
   * New upstream version
