@@ -1,0 +1,23 @@
+From: Kevin Peng <kkpengboy@gmail.com>
+Date: Fri, 27 Mar 2020 01:36:23 -0700
+Subject: Fix tests to work in Debian build
+
+---
+ tests/nodeenv_test.py | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/tests/nodeenv_test.py b/tests/nodeenv_test.py
+index 5e0c231..7936e04 100644
+--- a/tests/nodeenv_test.py
++++ b/tests/nodeenv_test.py
+@@ -73,8 +73,8 @@ def test_smoke(tmpdir):
+     nenv_path = tmpdir.join('nenv').strpath
+     subprocess.check_call([
+         # Enable coverage
+-        'coverage', 'run', '-p',
+-        '-m', 'nodeenv', '--prebuilt', nenv_path,
++        'python3-coverage', 'run', '-p',
++        '-m', 'nodeenv', '--node=system', nenv_path,
+     ])
+     assert os.path.exists(nenv_path)
+     subprocess.check_call([

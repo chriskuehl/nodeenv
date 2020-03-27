@@ -4,19 +4,23 @@ Priority: optional
 Maintainer: Chris Kuehl <ckuehl@ocf.berkeley.edu>
 Build-Depends: debhelper-compat (= 12),
                dh-python,
+               nodejs,
                python3-all,
+               python3-coverage,
+               python3-mock,
                python3-pkg-resources,
                python3-pkginfo,
+               python3-pytest,
                python3-setuptools
-Standards-Version: 3.9.8
+Standards-Version: 4.5.0
 Vcs-Git: https://github.com/chriskuehl/nodeenv.git
 Vcs-Browser: https://github.com/chriskuehl/nodeenv
 Homepage: https://ekalinin.github.io/nodeenv/
 
 Package: nodeenv
 Architecture: all
-Depends: python3-pkg-resources, ${misc:Depends}, ${python3:Depends}, make,
- gcc (>= 4:4.9.1) | nodejs, g++ (>= 4:4.9.1) | nodejs, libssl-dev | nodejs, python2.7 | nodejs
+Depends: python3-pkg-resources, ${misc:Depends}, ${python3:Depends}, ca-certificates | nodejs
+Recommends: make, gcc (>= 4:4.9.1), g++ (>= 4:4.9.1), python2, nodejs, libssl-dev, python3-distutils
 Description: Node.js virtual environment builder
  Tool to create isolated node.js environments with their own installation
  directories that don't share libraries with other node.js virtual
