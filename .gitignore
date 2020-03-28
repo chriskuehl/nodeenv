@@ -4,6 +4,7 @@
 *.swp
 *.swo
 env
+env-dev
 /nodeenv
 /TODO
 /build/
@@ -16,6 +17,8 @@ env
 /*.egg-info/
 .ropeproject/
 .tox/
+.idea/
+.cache/
 debian-upstream/files
 debian-upstream/nodeenv.substvars
 debian-upstream/nodeenv.*.debhelper

@@ -1,5 +1,6 @@
 #!/usr/bin/make -f
 export PYBUILD_NAME=nodeenv
+export PYBUILD_AFTER_TEST=rm -f {build_dir}/.coverage.*
 
 %:
 	dh $@ --with=python3 --buildsystem=pybuild

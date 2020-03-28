@@ -8,7 +8,8 @@ deploy-github:
 	git push --tags origin master
 
 deploy-pypi:
-	python setup.py sdist upload
+	python setup.py sdist bdist_wheel
+	twine upload --repository pypi dist/*
 
 update-pypi:
 	python setup.py register
@@ -27,6 +28,12 @@ env:
 		virtualenv --no-site-packages env && \
 		. env/bin/activate                && \
 		python setup.py install
+
+env-dev:
+	@rm -rf env-dev                           && \
+		virtualenv --no-site-packages env-dev && \
+		. env-dev/bin/activate                && \
+		pip install -r requirements-dev.txt
 
 test1: clean
 	@echo " ="
@@ -62,13 +69,12 @@ test3: clean
 # https://github.com/ekalinin/nodeenv/issues/43
 test4: clean
 	@echo " ="
-	@echo " = test4: separate nodejs's env for python3.5"
+	@echo " = test4: system nodejs's for python3.5"
 	@echo " ="
 	@rm -rf env                                                 && \
 		virtualenv --no-site-packages --python=python3.5 env    && \
 		. env/bin/activate                                      && \
 		python setup.py install                                 && \
-		nodeenv 4 -p --prebuilt                                 && \
 		nodeenv -p --node=system
 
 test5: clean
@@ -79,8 +85,7 @@ test5: clean
 		virtualenv --no-site-packages --python=python2.7 env    && \
 		. env/bin/activate                      && \
 		python setup.py install                 && \
-		nodeenv 4 -p --prebuilt                 && \
-		nodeenv -p --node=system
+		nodeenv -p --prebuilt
 
 test6: clean
 	@echo " ="
@@ -103,6 +108,8 @@ test7: clean
 		nodeenv -j 4 -p --prebuilt        && \
 		. env/bin/activate                && \
 		npm install -g sitemap 			  && \
+		npm -v                            && \
+		node -v                           && \
 		test "`freeze | wc -l`" = "1";
 
 test8: clean
@@ -114,12 +121,36 @@ test8: clean
 		. env/bin/activate                && \
 		python setup.py install           && \
 		rm -rf öäü && mkdir öäü && cd öäü && \
-		nodeenv -j 4 --prebuilt env
+		nodeenv -j 4 --prebuilt env       && \
+		rm -rf öäü
 
-tests: clean test1 test2 test3 test4 test5 test7 test8 clean
+test9: clean
+	@echo " ="
+	@echo " = test9: unicode paths, #187"
+	@echo " ="
+	@rm -rf env                           && \
+		virtualenv --no-site-packages env && \
+		. env/bin/activate                && \
+		python setup.py install           && \
+		rm -rf "test dir" && mkdir "test dir" && cd "test dir" && \
+		nodeenv -j 4 --prebuilt env       && \
+		rm -rf "test dir"
 
-ut:
-	@. env/bin/activate && tox -e py27
+test10: clean
+	@echo " ="
+	@echo " = test10: unicode paths, #189"
+	@echo " ="
+	@rm -rf env                           && \
+		virtualenv --no-site-packages env && \
+		. env/bin/activate                && \
+		python setup.py install           && \
+		nodeenv -j 4 -p --prebuilt        && \
+		nodeenv -j 4 -p --prebuilt
+
+tests: test1 test2 test3 test4 test5 test7 test8 test9 test10 clean
+
+ut: env-dev
+	@. env-dev/bin/activate && tox -e py27
 
 contributors:
 	@echo "Nodeenv is written and maintained by Eugene Kalinin." > AUTHORS

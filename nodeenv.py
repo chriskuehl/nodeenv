@@ -25,31 +25,36 @@ import pipes
 import platform
 import zipfile
 import shutil
+import glob
 
 try:  # pragma: no cover (py2 only)
     from ConfigParser import SafeConfigParser as ConfigParser
+    # noinspection PyCompatibility
     from HTMLParser import HTMLParser
     import urllib2
     iteritems = operator.methodcaller('iteritems')
 except ImportError:  # pragma: no cover (py3 only)
     from configparser import ConfigParser
+    # noinspection PyUnresolvedReferences
     from html.parser import HTMLParser
     import urllib.request as urllib2
     iteritems = operator.methodcaller('items')
 
 from pkg_resources import parse_version
 
-nodeenv_version = '1.1.0'
+nodeenv_version = '1.3.5'
 
 join = os.path.join
 abspath = os.path.abspath
+iojs_taken = False
 src_domain = "nodejs.org"
 
-is_PY3 = sys.version_info[0] == 3
+is_PY3 = sys.version_info[0] >= 3
 if is_PY3:
     from functools import cmp_to_key
 
 is_WIN = platform.system() == 'Windows'
+is_CYGWIN = platform.system().startswith('CYGWIN')
 
 
 # ---------------------------------------------------------
@@ -62,20 +67,19 @@ def to_utf8(text):
     if not text or is_PY3:
         return text
 
-    try:            # unicode or pure ascii
+    try:           # unicode or pure ascii
         return text.encode("utf8")
     except UnicodeDecodeError:
-        try:        # successful UTF-8 decode means it's pretty sure UTF-8
+        try:       # successful UTF-8 decode means it's pretty sure UTF-8
             text.decode("utf8")
             return text
         except UnicodeDecodeError:
-            try:    # get desperate; and yes,
-                    # this has a western hemisphere bias
+            try:   # get desperate; and yes, this has a western hemisphere bias
                 return text.decode("cp1252").encode("utf8")
             except UnicodeDecodeError:
                 pass
 
-    return text     # return unchanged, hope for the best
+    return text    # return unchanged, hope for the best
 
 
 class Config(object):
@@ -86,7 +90,7 @@ class Config(object):
     # Defaults
     node = 'latest'
     npm = 'latest'
-    with_npm = True if is_WIN else False
+    with_npm = False
     jobs = '2'
     without_ssl = False
     debug = False
@@ -174,8 +178,8 @@ def create_logger():
     Create logger for diagnostic
     """
     # create logger
-    logger = logging.getLogger("nodeenv")
-    logger.setLevel(logging.INFO)
+    loggr = logging.getLogger("nodeenv")
+    loggr.setLevel(logging.INFO)
 
     # monkey patch
     def emit(self, record):
@@ -196,8 +200,8 @@ def create_logger():
     ch.setFormatter(formatter)
 
     # add ch to logger
-    logger.addHandler(ch)
-    return logger
+    loggr.addHandler(ch)
+    return loggr
 
 
 logger = create_logger()
@@ -225,6 +229,11 @@ def parse_args(check=True):
         '-i', '--iojs',
         action='store_true', dest='io', default=False,
         help='Use iojs instead of nodejs.')
+
+    parser.add_option(
+        '--mirror',
+        action="store", dest='mirror',
+        help='Set mirror server of nodejs.org or iojs.org to download from.')
 
     if not is_WIN:
         parser.add_option(
@@ -339,7 +348,7 @@ def parse_args(check=True):
 
     options, args = parser.parse_args()
     if options.config_file is None:
-        options.config_file = ["./setup.cfg", "~/.nodeenvrc"]
+        options.config_file = ["./tox.ini", "./setup.cfg", "~/.nodeenvrc"]
     elif not options.config_file:
         options.config_file = []
     else:
@@ -376,12 +385,17 @@ def mkdir(path):
         logger.debug(' * Directory %s already exists', path)
 
 
+def make_executable(filename):
+    mode_0755 = (stat.S_IRWXU | stat.S_IXGRP |
+                 stat.S_IRGRP | stat.S_IROTH | stat.S_IXOTH)
+    os.chmod(filename, mode_0755)
+
+
+# noinspection PyArgumentList
 def writefile(dest, content, overwrite=True, append=False):
     """
     Create file and write content in it
     """
-    mode_0755 = (stat.S_IRWXU | stat.S_IXGRP |
-                 stat.S_IRGRP | stat.S_IROTH | stat.S_IXOTH)
     content = to_utf8(content)
     if is_PY3 and type(content) != bytes:
         content = bytes(content, 'utf-8')
@@ -389,7 +403,7 @@ def writefile(dest, content, overwrite=True, append=False):
         logger.debug(' * Writing %s ... ', dest, extra=dict(continued=True))
         with open(dest, 'wb') as f:
             f.write(content)
-        os.chmod(dest, mode_0755)
+        make_executable(dest)
         logger.debug('done.')
         return
     else:
@@ -407,11 +421,7 @@ def writefile(dest, content, overwrite=True, append=False):
         if append:
             logger.info(' * Appending data to %s', dest)
             with open(dest, 'ab') as f:
-                if not is_WIN:
-                    f.write(DISABLE_PROMPT.encode('utf-8'))
                 f.write(content)
-                if not is_WIN:
-                    f.write(ENABLE_PROMPT.encode('utf-8'))
             return
 
         logger.info(' * Overwriting %s with new content', dest)
@@ -465,7 +475,13 @@ def callit(cmd, show_stdout=True, in_shell=False,
         line = stdout.readline()
         if not line:
             break
-        line = line.decode('utf-8').rstrip()
+        try:
+            if is_WIN:
+                line = line.decode('mbcs').rstrip()
+            else:
+                line = line.decode('utf8').rstrip()
+        except UnicodeDecodeError:
+            line = line.decode('cp866').rstrip()
         all_output.append(line)
         if show_stdout:
             logger.info(line)
@@ -486,7 +502,7 @@ def get_root_url(version):
     if parse_version(version) > parse_version("0.5.0"):
         return 'https://%s/dist/v%s/' % (src_domain, version)
     else:
-        return 'https://%s/dist/' % (src_domain)
+        return 'https://%s/dist/' % src_domain
 
 
 def get_node_bin_url(version):
@@ -494,17 +510,19 @@ def get_node_bin_url(version):
         'x86':    'x86',  # Windows Vista 32
         'i686':   'x86',
         'x86_64': 'x64',  # Linux Ubuntu 64
+        'amd64':  'x64',  # FreeBSD 64bits
         'AMD64':  'x64',  # Windows Server 2012 R2 (x64)
         'armv6l': 'armv6l',     # arm
         'armv7l': 'armv7l',
-        'aarch64': 'armv64',
+        'aarch64': 'arm64',
     }
     sysinfo = {
         'system': platform.system().lower(),
         'arch': archmap[platform.machine()],
     }
-    if is_WIN:
-        filename = 'win-%(arch)s/node.exe' % sysinfo
+    if is_WIN or is_CYGWIN:
+        postfix = '-win-%(arch)s.zip' % sysinfo
+        filename = '%s-v%s%s' % (get_binary_prefix(), version, postfix)
     else:
         postfix = '-%(system)s-%(arch)s.tar.gz' % sysinfo
         filename = '%s-v%s%s' % (get_binary_prefix(), version, postfix)
@@ -534,19 +552,25 @@ def download_node_src(node_url, src_dir, opt, prefix):
     dl_contents = io.BytesIO(urlopen(node_url).read())
     logger.info('.', extra=dict(continued=True))
 
-    if is_WIN:
-        writefile(join(src_dir, 'node.exe'), dl_contents.read())
+    if is_WIN or is_CYGWIN:
+        ctx = zipfile.ZipFile(dl_contents)
+        members = operator.methodcaller('namelist')
+        member_name = lambda s: s  # noqa: E731
     else:
-        with tarfile_open(fileobj=dl_contents) as tarfile_obj:
-            member_list = tarfile_obj.getmembers()
-            extract_list = []
-            for member in member_list:
-                node_ver = opt.node.replace('.', '\.')
-                rexp_string = "%s-v%s[^/]*/(README\.md|CHANGELOG\.md|LICENSE)"\
-                    % (prefix, node_ver)
-                if re.match(rexp_string, member.name) is None:
-                    extract_list.append(member)
-            tarfile_obj.extractall(src_dir, extract_list)
+        ctx = tarfile_open(fileobj=dl_contents)
+        members = operator.methodcaller('getmembers')
+        member_name = operator.attrgetter('name')
+
+    with ctx as archive:
+        node_ver = re.escape(opt.node)
+        rexp_string = r"%s-v%s[^/]*/(README\.md|CHANGELOG\.md|LICENSE)"\
+            % (prefix, node_ver)
+        extract_list = [
+            member
+            for member in members(archive)
+            if re.match(rexp_string, member_name(member)) is None
+        ]
+        archive.extractall(src_dir, extract_list)
 
 
 def urlopen(url):
@@ -559,20 +583,51 @@ def urlopen(url):
 # Virtual environment functions
 
 
-def copy_node_from_prebuilt(env_dir, src_dir):
+def copytree(src, dst, symlinks=False, ignore=None):
+    for item in os.listdir(src):
+        s = os.path.join(src, item)
+        d = os.path.join(dst, item)
+        if os.path.isdir(s):
+            try:
+                shutil.copytree(s, d, symlinks, ignore)
+            except OSError:
+                copytree(s, d, symlinks, ignore)
+        else:
+            if os.path.islink(s):
+                # copy link only if it not exists. #189
+                if not os.path.islink(d):
+                    os.symlink(os.readlink(s), d)
+            else:
+                shutil.copy2(s, d)
+
+
+def copy_node_from_prebuilt(env_dir, src_dir, node_version):
     """
     Copy prebuilt binaries into environment
     """
     logger.info('.', extra=dict(continued=True))
     prefix = get_binary_prefix()
     if is_WIN:
-        src_exe = join(src_dir, 'node.exe')
-        dst_exe = join(env_dir, 'Scripts', 'node.exe')
-        mkdir(join(env_dir, 'Scripts'))
-        callit(['copy', '/Y', '/L', src_exe, dst_exe], False, True)
+        dest = join(env_dir, 'Scripts')
+        mkdir(dest)
+    elif is_CYGWIN:
+        dest = join(env_dir, 'bin')
+        mkdir(dest)
+        # write here to avoid https://bugs.python.org/issue35650
+        writefile(join(env_dir, 'bin', 'node'), CYGWIN_NODE)
     else:
-        src_folder = src_dir + '/%s-v*/*' % prefix
-        callit(['cp', '-a', src_folder, env_dir], True, env_dir)
+        dest = env_dir
+
+    src_folder_tpl = src_dir + to_utf8('/%s-v%s*' % (prefix, node_version))
+    src_folder, = glob.glob(src_folder_tpl)
+    copytree(src_folder, dest, True)
+
+    if is_CYGWIN:
+        for filename in ('npm', 'npx', 'node.exe'):
+            filename = join(env_dir, 'bin', filename)
+            if os.path.exists(filename):
+                make_executable(filename)
+
     logger.info('.', extra=dict(continued=True))
 
 
@@ -612,9 +667,10 @@ def build_node_from_src(env_dir, src_dir, node_src_dir, opt):
         env['PATH'] = '{}:{}'.format(node_tmpbin_dir,
                                      os.environ.get('PATH', ''))
 
-    conf_cmd = []
-    conf_cmd.append('./configure')
-    conf_cmd.append('--prefix=%s' % pipes.quote(env_dir))
+    conf_cmd = [
+        './configure',
+        '--prefix=%s' % pipes.quote(env_dir)
+    ]
     if opt.without_ssl:
         conf_cmd.append('--without-ssl')
     if opt.debug:
@@ -632,7 +688,7 @@ def build_node_from_src(env_dir, src_dir, node_src_dir, opt):
 
 
 def get_binary_prefix():
-    return to_utf8('node' if src_domain == 'nodejs.org' else 'iojs')
+    return to_utf8('node' if not iojs_taken else 'iojs')
 
 
 def install_node(env_dir, src_dir, opt):
@@ -640,6 +696,15 @@ def install_node(env_dir, src_dir, opt):
     Download source code for node.js, unpack it
     and install it in virtual environment.
     """
+    try:
+        install_node_wrapped(env_dir, src_dir, opt)
+    except BaseException:
+        # this restores the newline suppressed by continued=True
+        logger.info('')
+        raise
+
+
+def install_node_wrapped(env_dir, src_dir, opt):
     env_dir = abspath(env_dir)
     prefix = get_binary_prefix()
     node_src_dir = join(src_dir, to_utf8('%s-v%s' % (prefix, opt.node)))
@@ -660,21 +725,20 @@ def install_node(env_dir, src_dir, opt):
     logger.info('.', extra=dict(continued=True))
 
     if opt.prebuilt:
-        copy_node_from_prebuilt(env_dir, src_dir)
+        copy_node_from_prebuilt(env_dir, src_dir, opt.node)
     else:
         build_node_from_src(env_dir, src_dir, node_src_dir, opt)
 
     logger.info(' done.')
 
 
-def install_npm(env_dir, src_dir, opt):
+def install_npm(env_dir, _src_dir, opt):
     """
     Download source code for npm, unpack it
     and install it in virtual environment.
     """
     logger.info(' * Install npm.js (%s) ... ' % opt.npm,
                 extra=dict(continued=True))
-    npm_contents = urlopen('https://www.npmjs.org/install.sh').read()
     env = dict(
         os.environ,
         clean='no' if opt.no_npm_clean else 'yes',
@@ -683,8 +747,9 @@ def install_npm(env_dir, src_dir, opt):
     proc = subprocess.Popen(
         (
             'bash', '-c',
-            '. {0} && exec bash'.format(
+            '. {0} && npm install -g npm@{1}'.format(
                 pipes.quote(join(env_dir, 'bin', 'activate')),
+                opt.npm,
             )
         ),
         env=env,
@@ -692,7 +757,7 @@ def install_npm(env_dir, src_dir, opt):
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )
-    out, _ = proc.communicate(npm_contents)
+    out, _ = proc.communicate()
     if opt.verbose:
         logger.info(out)
     logger.info('done.')
@@ -705,7 +770,7 @@ def install_npm_win(env_dir, src_dir, opt):
     """
     logger.info(' * Install npm.js (%s) ... ' % opt.npm,
                 extra=dict(continued=True))
-    npm_url = 'https://github.com/npm/npm/archive/%s.zip' % opt.npm
+    npm_url = 'https://github.com/npm/cli/archive/v%s.zip' % opt.npm
     npm_contents = io.BytesIO(urlopen(npm_url).read())
 
     bin_path = join(env_dir, 'Scripts')
@@ -723,12 +788,21 @@ def install_npm_win(env_dir, src_dir, opt):
     with zipfile.ZipFile(npm_contents, 'r') as zipf:
         zipf.extractall(src_dir)
 
-    npm_ver = 'npm-%s' % opt.npm
+    npm_ver = 'cli-%s' % opt.npm
     shutil.copytree(join(src_dir, npm_ver), node_modules_path)
     shutil.copy(join(src_dir, npm_ver, 'bin', 'npm.cmd'),
                 join(bin_path, 'npm.cmd'))
     shutil.copy(join(src_dir, npm_ver, 'bin', 'npm-cli.js'),
                 join(bin_path, 'npm-cli.js'))
+
+    if is_CYGWIN:
+        shutil.copy(join(bin_path, 'npm-cli.js'),
+                    join(env_dir, 'bin', 'npm-cli.js'))
+        shutil.copytree(join(bin_path, 'node_modules'),
+                        join(env_dir, 'bin', 'node_modules'))
+        npm_gh_url = 'https://raw.githubusercontent.com/npm/cli'
+        npm_bin_url = '{}/{}/bin/npm'.format(npm_gh_url, opt.npm)
+        writefile(join(env_dir, 'bin', 'npm'), urlopen(npm_bin_url).read())
 
 
 def install_packages(env_dir, opt):
@@ -763,15 +837,25 @@ def install_activate(env_dir, opt):
     Install virtual environment activation script
     """
     if is_WIN:
-        files = {'activate.bat': ACTIVATE_BAT}
+        files = {
+            'activate.bat': ACTIVATE_BAT,
+            "deactivate.bat": DEACTIVATE_BAT,
+            "Activate.ps1": ACTIVATE_PS1
+        }
         bin_dir = join(env_dir, 'Scripts')
         shim_node = join(bin_dir, "node.exe")
         shim_nodejs = join(bin_dir, "nodejs.exe")
     else:
-        files = {'activate': ACTIVATE_SH, 'shim': SHIM}
+        files = {
+            'activate': ACTIVATE_SH,
+            'activate.fish': ACTIVATE_FISH,
+            'shim': SHIM
+        }
         bin_dir = join(env_dir, 'bin')
         shim_node = join(bin_dir, "node")
         shim_nodejs = join(bin_dir, "nodejs")
+    if is_CYGWIN:
+        mkdir(bin_dir)
 
     if opt.node == "system":
         files["node"] = SHIM
@@ -799,13 +883,26 @@ def install_activate(env_dir, opt):
         content = content.replace('__SHIM_NODE__', shim_node)
         content = content.replace('__BIN_NAME__', os.path.basename(bin_dir))
         content = content.replace('__MOD_NAME__', mod_dir)
+        if is_CYGWIN:
+            _, cyg_bin_dir = callit(
+                ['cygpath', '-w', os.path.abspath(bin_dir)],
+                show_stdout=False, in_shell=False)
+            content = content.replace('__NPM_CONFIG_PREFIX__', cyg_bin_dir[0])
+        else:
+            content = content.replace('__NPM_CONFIG_PREFIX__',
+                                      '$NODE_VIRTUAL_ENV')
         # if we call in the same environment:
         #   $ nodeenv -p --prebuilt
         #   $ nodeenv -p --node=system
         # we should get `bin/node` not as binary+string.
         # `bin/activate` should be appended if we inside
         # existing python's virtual environment
-        need_append = 0 if name in ('node', 'shim') else opt.python_virtualenv
+        need_append = False
+        if opt.python_virtualenv:
+            disable_prompt = DISABLE_PROMPT.get(name, '')
+            enable_prompt = ENABLE_PROMPT.get(name, '')
+            content = disable_prompt + content + enable_prompt
+            need_append = bool(disable_prompt)
         writefile(file_path, content, append=need_append)
 
     if not os.path.exists(shim_nodejs):
@@ -846,7 +943,7 @@ def create_environment(env_dir, opt):
     # for install
     install_activate(env_dir, opt)
     if node_version_from_opt(opt) < parse_version("0.6.3") or opt.with_npm:
-        instfunc = install_npm_win if is_WIN else install_npm
+        instfunc = install_npm_win if is_WIN or is_CYGWIN else install_npm
         instfunc(env_dir, src_dir, opt)
     if opt.requirements:
         install_packages(env_dir, opt)
@@ -868,7 +965,7 @@ class GetsAHrefs(HTMLParser):
             self.hrefs.append(dict(attrs).get('href', ''))
 
 
-VERSION_RE = re.compile('\d+\.\d+\.\d+')
+VERSION_RE = re.compile(r'\d+\.\d+\.\d+')
 
 
 def _py2_cmp(a, b):
@@ -928,7 +1025,7 @@ def get_last_stable_node_version():
     """
     Return last stable node.js version
     """
-    response = urlopen('https://%s/dist/latest/' % (src_domain))
+    response = urlopen('https://%s/dist/latest/' % src_domain)
     href_parser = GetsAHrefs()
     href_parser.feed(response.read().decode('UTF-8'))
 
@@ -953,6 +1050,8 @@ def get_env_dir(opt, args):
             res = sys.prefix
         elif hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix:
             res = sys.prefix
+        elif 'CONDA_PREFIX' in os.environ:
+            res = sys.prefix
         else:
             logger.error('No python virtualenv is available')
             sys.exit(2)
@@ -971,6 +1070,7 @@ def is_installed(name):
     return True
 
 
+# noinspection PyProtectedMember
 def main():
     """
     Entry point
@@ -981,6 +1081,7 @@ def main():
         return
 
     opt, args = parse_args(check=False)
+    # noinspection PyProtectedMember
     Config._load(opt.config_file, opt.verbose)
 
     opt, args = parse_args()
@@ -989,9 +1090,15 @@ def main():
         logger.error('Installing system node.js on win32 is not supported!')
         exit(1)
 
+    global iojs_taken
+    global src_domain
+
     if opt.io:
-        global src_domain
+        iojs_taken = True
         src_domain = "iojs.org"
+
+    if opt.mirror:
+        src_domain = opt.mirror
 
     if not opt.node or opt.node.lower() == "latest":
         opt.node = get_last_stable_node_version()
@@ -1009,16 +1116,29 @@ def main():
 # ---------------------------------------------------------
 # Shell scripts content
 
-DISABLE_PROMPT = """
+DISABLE_PROMPT = {
+    'activate': """
 # disable nodeenv's prompt
 # (prompt already changed by original virtualenv's script)
 # https://github.com/ekalinin/nodeenv/issues/26
 NODE_VIRTUAL_ENV_DISABLE_PROMPT=1
-"""
+""",
+    'activate.fish': """
+# disable nodeenv's prompt
+# (prompt already changed by original virtualenv's script)
+# https://github.com/ekalinin/nodeenv/issues/26
+set NODE_VIRTUAL_ENV_DISABLE_PROMPT 1
+""",
+}
 
-ENABLE_PROMPT = """
+ENABLE_PROMPT = {
+    'activate': """
 unset NODE_VIRTUAL_ENV_DISABLE_PROMPT
-"""
+""",
+    'activate.fish': """
+set -e NODE_VIRTUAL_ENV_DISABLE_PROMPT
+""",
+}
 
 SHIM = """#!/usr/bin/env bash
 export NODE_PATH=__NODE_VIRTUAL_ENV__/lib/node_modules
@@ -1027,32 +1147,100 @@ export npm_config_prefix=__NODE_VIRTUAL_ENV__
 exec __SHIM_NODE__ "$@"
 """
 
-ACTIVATE_BAT = """\
+ACTIVATE_BAT = r"""
 @echo off
-set NODE_VIRTUAL_ENV="__NODE_VIRTUAL_ENV__"
+set "NODE_VIRTUAL_ENV=__NODE_VIRTUAL_ENV__"
+if not defined PROMPT (
+    set "PROMPT=$P$G"
+)
 if defined _OLD_VIRTUAL_PROMPT (
     set "PROMPT=%_OLD_VIRTUAL_PROMPT%"
-) else (
-    if not defined PROMPT (
-        set "PROMPT=$P$G"
-    )
-    set "_OLD_VIRTUAL_PROMPT=%PROMPT%"
 )
-set "PROMPT=__NODE_VIRTUAL_PROMPT__ %PROMPT%"
-if not defined _OLD_VIRTUAL_NODE_PATH (
-    set "_OLD_VIRTUAL_NODE_PATH=%NODE_PATH%"
-)
-set NODE_PATH=__NODE_VIRTUAL_ENV__\\lib\\node_modules
 if defined _OLD_VIRTUAL_NODE_PATH (
-    set "PATH=%_OLD_VIRTUAL_NODE_PATH%"
-) else (
-    set "_OLD_VIRTUAL_NODE_PATH=%PATH%"
+    set "NODE_PATH=%_OLD_VIRTUAL_NODE_PATH%"
 )
-set "PATH=%NODE_VIRTUAL_ENV%\\Scripts;%PATH%"
+set "_OLD_VIRTUAL_PROMPT=%PROMPT%"
+set "PROMPT=__NODE_VIRTUAL_PROMPT__ %PROMPT%"
+if defined NODE_PATH (
+    set "_OLD_VIRTUAL_NODE_PATH=%NODE_PATH%"
+    set NODE_PATH=
+)
+if defined _OLD_VIRTUAL_PATH (
+    set "PATH=%_OLD_VIRTUAL_PATH%"
+) else (
+    set "_OLD_VIRTUAL_PATH=%PATH%"
+)
+set "PATH=%NODE_VIRTUAL_ENV%\Scripts;%PATH%"
+:END
+
+"""
+
+DEACTIVATE_BAT = """\
+@echo off
+if defined _OLD_VIRTUAL_PROMPT (
+    set "PROMPT=%_OLD_VIRTUAL_PROMPT%"
+)
+set _OLD_VIRTUAL_PROMPT=
+if defined _OLD_VIRTUAL_NODE_PATH (
+    set "NODE_PATH=%_OLD_VIRTUAL_NODE_PATH%"
+    set _OLD_VIRTUAL_NODE_PATH=
+)
+if defined _OLD_VIRTUAL_PATH (
+    set "PATH=%_OLD_VIRTUAL_PATH%"
+)
+set _OLD_VIRTUAL_PATH=
+set NODE_VIRTUAL_ENV=
 :END
 """
 
-ACTIVATE_SH = """
+ACTIVATE_PS1 = r"""
+function global:deactivate ([switch]$NonDestructive) {
+    # Revert to original values
+    if (Test-Path function:_OLD_VIRTUAL_PROMPT) {
+        copy-item function:_OLD_VIRTUAL_PROMPT function:prompt
+        remove-item function:_OLD_VIRTUAL_PROMPT
+    }
+    if (Test-Path env:_OLD_VIRTUAL_NODE_PATH) {
+        copy-item env:_OLD_VIRTUAL_NODE_PATH env:NODE_PATH
+        remove-item env:_OLD_VIRTUAL_NODE_PATH
+    }
+    if (Test-Path env:_OLD_VIRTUAL_PATH) {
+        copy-item env:_OLD_VIRTUAL_PATH env:PATH
+        remove-item env:_OLD_VIRTUAL_PATH
+    }
+    if (Test-Path env:NODE_VIRTUAL_ENV) {
+        remove-item env:NODE_VIRTUAL_ENV
+    }
+    if (!$NonDestructive) {
+        # Self destruct!
+        remove-item function:deactivate
+    }
+}
+
+deactivate -nondestructive
+$env:NODE_VIRTUAL_ENV="__NODE_VIRTUAL_ENV__"
+
+# Set the prompt to include the env name
+# Make sure _OLD_VIRTUAL_PROMPT is global
+function global:_OLD_VIRTUAL_PROMPT {""}
+copy-item function:prompt function:_OLD_VIRTUAL_PROMPT
+function global:prompt {
+    Write-Host -NoNewline -ForegroundColor Green '__NODE_VIRTUAL_PROMPT__ '
+    _OLD_VIRTUAL_PROMPT
+}
+
+# Clear NODE_PATH
+if (Test-Path env:NODE_PATH) {
+    copy-item env:NODE_PATH env:_OLD_VIRTUAL_NODE_PATH
+    remove-item env:NODE_PATH
+}
+
+# Add the venv to the PATH
+copy-item env:PATH env:_OLD_VIRTUAL_PATH
+$env:PATH = "$env:NODE_VIRTUAL_ENV\Scripts;$env:PATH"
+"""
+
+ACTIVATE_SH = r"""
 
 # This file must be used with "source bin/activate" *from bash*
 # you cannot run it directly
@@ -1119,7 +1307,7 @@ freeze () {
     fi
 }
 
-# unset irrelavent variables
+# unset irrelevant variables
 deactivate_node nondestructive
 
 # find the directory of this script
@@ -1150,22 +1338,22 @@ export NODE_PATH
 
 _OLD_NPM_CONFIG_PREFIX="$NPM_CONFIG_PREFIX"
 _OLD_npm_config_prefix="$npm_config_prefix"
-NPM_CONFIG_PREFIX="$NODE_VIRTUAL_ENV"
-npm_config_prefix="$NODE_VIRTUAL_ENV"
+NPM_CONFIG_PREFIX="__NPM_CONFIG_PREFIX__"
+npm_config_prefix="__NPM_CONFIG_PREFIX__"
 export NPM_CONFIG_PREFIX
 export npm_config_prefix
 
 if [ -z "$NODE_VIRTUAL_ENV_DISABLE_PROMPT" ] ; then
     _OLD_NODE_VIRTUAL_PS1="$PS1"
     if [ "x__NODE_VIRTUAL_PROMPT__" != x ] ; then
-        PS1="__NODE_VIRTUAL_PROMPT__$PS1"
+        PS1="__NODE_VIRTUAL_PROMPT__ $PS1"
     else
     if [ "`basename \"$NODE_VIRTUAL_ENV\"`" = "__" ] ; then
         # special case for Aspen magic directories
         # see http://www.zetadev.com/software/aspen/
         PS1="[`basename \`dirname \"$NODE_VIRTUAL_ENV\"\``] $PS1"
     else
-        PS1="(`basename \"$NODE_VIRTUAL_ENV\"`)$PS1"
+        PS1="(`basename \"$NODE_VIRTUAL_ENV\"`) $PS1"
     fi
     fi
     export PS1
@@ -1179,8 +1367,150 @@ if [ -n "$BASH" -o -n "$ZSH_VERSION" ] ; then
 fi
 """
 
+
+ACTIVATE_FISH = """
+
+# This file must be used with "source bin/activate.fish" *from fish*
+# you cannot run it directly
+
+function deactivate_node -d 'Exit nodeenv and return to normal environment.'
+    # reset old environment variables
+    if test -n "$_OLD_NODE_VIRTUAL_PATH"
+        set -gx PATH $_OLD_NODE_VIRTUAL_PATH
+        set -e _OLD_NODE_VIRTUAL_PATH
+    end
+
+    if test -n "$_OLD_NODE_PATH"
+        set -gx NODE_PATH $_OLD_NODE_PATH
+        set -e _OLD_NODE_PATH
+    else
+        set -e NODE_PATH
+    end
+
+    if test -n "$_OLD_NPM_CONFIG_PREFIX"
+        set -gx NPM_CONFIG_PREFIX $_OLD_NPM_CONFIG_PREFIX
+        set -e _OLD_NPM_CONFIG_PREFIX
+    else
+        set -e NPM_CONFIG_PREFIX
+    end
+
+    if test -n "$_OLD_npm_config_prefix"
+        set -gx npm_config_prefix $_OLD_npm_config_prefix
+        set -e _OLD_npm_config_prefix
+    else
+        set -e npm_config_prefix
+    end
+
+    if test -n "$_OLD_NODE_FISH_PROMPT_OVERRIDE"
+        # Set an empty local `$fish_function_path` to allow the removal of
+        # `fish_prompt` using `functions -e`.
+        set -l fish_function_path
+
+        # Erase virtualenv's `fish_prompt` and restore the original.
+        functions -e fish_prompt
+        functions -c _old_fish_prompt fish_prompt
+        functions -e _old_fish_prompt
+        set -e _OLD_NODE_FISH_PROMPT_OVERRIDE
+    end
+
+    if test (count $argv) = 0 -o "$argv[1]" != "nondestructive"
+        # Self destruct!
+        functions -e deactivate_node
+    end
+end
+
+function freeze -d 'Show a list of installed packages - like `pip freeze`'
+    set -l NPM_VER (npm -v | cut -d '.' -f 1)
+    set -l RE "[a-zA-Z0-9\\.\\-]+@[0-9]+\\.[0-9]+\\.[0-9]+([\\+\\-][a-zA-Z0-9\\.\\-]+)*"
+
+    if test "$NPM_VER" = "0"
+        set -g NPM_LIST (npm list installed active >/dev/null ^/dev/null | \
+                         cut -d ' ' -f 1 | grep -v npm)
+    else
+        set -l NPM_LS "npm ls -g"
+        if test (count $argv) -gt 0 -a "$argv[1]" = "-l"
+            set NPM_LS "npm ls"
+            set -e argv[1]
+        end
+        set -l NPM_LIST (eval $NPM_LS | grep -E '^.{4}\\w{1}' | \
+                                        grep -o -E "$re" | \
+                                        grep -v npm)
+    end
+
+    if test (count $argv) = 0
+        echo $NPM_LIST
+    else
+        echo $NPM_LIST > $argv[1]
+    end
+end
+
+# unset irrelevant variables
+deactivate_node nondestructive
+
+# NODE_VIRTUAL_ENV is the parent of the directory where this script is
+set -gx NODE_VIRTUAL_ENV __NODE_VIRTUAL_ENV__
+
+set -gx _OLD_NODE_VIRTUAL_PATH $PATH
+# The node_modules/.bin path doesn't exists and it will print a warning, and
+# that's why we redirect stderr to /dev/null :)
+set -gx PATH "$NODE_VIRTUAL_ENV/lib/node_modules/.bin" "$NODE_VIRTUAL_ENV/__BIN_NAME__" $PATH ^/dev/null
+
+if set -q NODE_PATH
+    set -gx _OLD_NODE_PATH $NODE_PATH
+    set -gx NODE_PATH "$NODE_VIRTUAL_ENV/__MOD_NAME__" $NODE_PATH
+else
+    set -gx NODE_PATH "$NODE_VIRTUAL_ENV/__MOD_NAME__"
+end
+
+if set -q NPM_CONFIG_PREFIX
+    set -gx _OLD_NPM_CONFIG_PREFIX $NPM_CONFIG_PREFIX
+end
+set -gx NPM_CONFIG_PREFIX "__NPM_CONFIG_PREFIX__"
+
+if set -q npm_config_prefix
+    set -gx _OLD_npm_config_prefix $npm_config_prefix
+end
+set -gx npm_config_prefix "__NPM_CONFIG_PREFIX__"
+
+if test -z "$NODE_VIRTUAL_ENV_DISABLE_PROMPT"
+    # Copy the current `fish_prompt` function as `_old_fish_prompt`.
+    functions -c fish_prompt _old_fish_prompt
+
+    function fish_prompt
+        # Save the current $status, for fish_prompts that display it.
+        set -l old_status $status
+
+        # Prompt override provided?
+        # If not, just prepend the environment name.
+        if test -n ""
+            printf '%s%s' "" (set_color normal)
+        else
+            printf '%s(%s) ' (set_color normal) (basename "$NODE_VIRTUAL_ENV")
+        end
+
+        # Restore the original $status
+        echo "exit $old_status" | source
+        _old_fish_prompt
+    end
+
+    set -gx _OLD_NODE_FISH_PROMPT_OVERRIDE "$NODE_VIRTUAL_ENV"
+end
+"""  # noqa: E501
+
 PREDEACTIVATE_SH = """
 if type -p deactivate_node > /dev/null; then deactivate_node;fi
+"""
+
+CYGWIN_NODE = """#!/bin/sh
+
+if [ -r "$1" ]; then
+    SCRIPT_PATH=$(cygpath -w "$1")
+    shift
+    set - $SCRIPT_PATH $@
+    unset SCRIPT_PATH
+fi
+
+exec $(dirname "$0")/node.exe "$@"
 """
 
 if __name__ == '__main__':
