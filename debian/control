@@ -1,6 +1,6 @@
 Source: nodeenv
 Section: utils
-Priority: extra
+Priority: optional
 Maintainer: Chris Kuehl <ckuehl@ocf.berkeley.edu>
 Build-Depends: debhelper-compat (= 13),
                dh-python,
